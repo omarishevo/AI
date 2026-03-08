@@ -251,6 +251,9 @@ defaults = {
     "total_messages": 0,
     "pending_input":  "",
     "groq_api_key":   "",
+    "editing_index":  None,   # index of message being edited (int or None)
+    "edit_text":      "",     # current text in the edit box
+    "pending_resend": False,  # trigger resend after edit
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -398,6 +401,44 @@ if not st.session_state.groq_api_key:
         """)
     st.stop()
 
+# -- Helper: call Groq and stream into a placeholder --
+def stream_response(system_prompt, api_messages, placeholder):
+    full = ""
+    try:
+        client = Groq(api_key=st.session_state.groq_api_key)
+        stream = client.chat.completions.create(
+            model=model_id,
+            messages=[{"role": "system", "content": system_prompt}] + api_messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                full += delta
+                placeholder.markdown(full + "▌")
+        placeholder.markdown(full)
+        try:
+            usage = chunk.x_groq.usage if hasattr(chunk, "x_groq") else None
+            if usage:
+                st.session_state.total_tokens += usage.prompt_tokens + usage.completion_tokens
+        except Exception:
+            pass
+    except Exception as e:
+        err = str(e)
+        if "invalid_api_key" in err.lower() or "401" in err:
+            full = "❌ Invalid API key. Please check your Groq API key in the sidebar."
+        elif "rate_limit" in err.lower() or "429" in err:
+            full = "⚠️ Rate limit reached. Wait a few seconds and try again."
+        elif "model_not_found" in err.lower():
+            full = f"⚠️ Model `{model_id}` not available. Try a different model."
+        else:
+            full = f"❌ Error: {err}"
+        placeholder.error(full)
+    return full
+
+
 # -- Chat history --
 if not st.session_state.messages:
     st.markdown(f"""
@@ -411,17 +452,71 @@ if not st.session_state.messages:
     </div>
     """, unsafe_allow_html=True)
 
-    # Functional suggestion buttons
     cols = st.columns(3)
     for i, s in enumerate(SUGGESTIONS):
         if cols[i % 3].button(s, key=f"sug_{i}", use_container_width=True):
             st.session_state.pending_input = s
             st.rerun()
 else:
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"],
-                             avatar="user" if msg["role"]=="user" else "assistant"):
-            st.markdown(msg["content"])
+    for idx, msg in enumerate(st.session_state.messages):
+        with st.chat_message(msg["role"]):
+
+            # -- User message: show Edit button --
+            if msg["role"] == "user":
+                # Are we currently editing this message?
+                if st.session_state.editing_index == idx:
+                    # Edit box
+                    edited = st.text_area(
+                        "Edit your message",
+                        value=st.session_state.edit_text,
+                        key=f"edit_area_{idx}",
+                        height=100,
+                        label_visibility="collapsed",
+                    )
+                    st.session_state.edit_text = edited
+
+                    btn_col1, btn_col2, _ = st.columns([1, 1, 5])
+                    with btn_col1:
+                        if st.button("✅ Save & Resend", key=f"save_{idx}"):
+                            new_text = st.session_state.edit_text.strip()
+                            if new_text:
+                                # Update the user message
+                                st.session_state.messages[idx]["content"] = new_text
+                                st.session_state.messages[idx]["edited"] = True
+                                # Remove all messages after this user turn
+                                st.session_state.messages = st.session_state.messages[:idx + 1]
+                                st.session_state.editing_index = None
+                                st.session_state.edit_text = ""
+                                st.session_state.pending_resend = True
+                                st.rerun()
+                    with btn_col2:
+                        if st.button("✖ Cancel", key=f"cancel_{idx}"):
+                            st.session_state.editing_index = None
+                            st.session_state.edit_text = ""
+                            st.rerun()
+                else:
+                    # Normal display with Edit button
+                    msg_col, btn_col = st.columns([9, 1])
+                    with msg_col:
+                        label = msg["content"]
+                        if msg.get("edited"):
+                            st.markdown(
+                                msg["content"] +
+                                " <span style='font-size:0.72rem;color:#6B6B8A;'>(edited)</span>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            st.markdown(msg["content"])
+                    with btn_col:
+                        if st.button("✏️", key=f"edit_{idx}",
+                                     help="Edit this message"):
+                            st.session_state.editing_index = idx
+                            st.session_state.edit_text = msg["content"]
+                            st.rerun()
+
+            # -- Assistant message: plain display --
+            else:
+                st.markdown(msg["content"])
 
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -437,79 +532,55 @@ if st.session_state.pending_input and not prompt:
     st.session_state.pending_input = ""
 
 # -------------------------------------------------------------------------------
-# HANDLE MESSAGE
+# HANDLE RESEND AFTER EDIT
 # -------------------------------------------------------------------------------
-if prompt:
-    ts = datetime.now().strftime("%H:%M")
+if st.session_state.get("pending_resend"):
+    st.session_state.pending_resend = False
 
-    # Save & show user message
-    st.session_state.messages.append({"role": "user", "content": prompt, "time": ts})
-    st.session_state.total_messages += 1
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # Build system prompt
     base_system = PERSONAS[st.session_state.persona]["system"]
     system_prompt = base_system + (f"\n\n{system_extra}" if system_extra.strip() else "")
-
-    # Build message history for API
     api_messages = [
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state.messages
     ]
 
-    # Stream response
     with st.chat_message("assistant"):
-        response_placeholder = st.empty()
-        full_response = ""
+        placeholder = st.empty()
+        full_response = stream_response(system_prompt, api_messages, placeholder)
 
-        try:
-            client = Groq(api_key=st.session_state.groq_api_key)
-
-            stream = client.chat.completions.create(
-                model=model_id,
-                messages=[{"role": "system", "content": system_prompt}] + api_messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stream=True,
-            )
-
-            # Stream tokens live
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    full_response += delta
-                    response_placeholder.markdown(full_response + "▌")
-
-            # Final render without cursor
-            response_placeholder.markdown(full_response)
-
-            # Token usage (Groq returns this on last chunk)
-            try:
-                usage = chunk.x_groq.usage if hasattr(chunk, "x_groq") else None
-                if usage:
-                    st.session_state.total_tokens += (
-                        usage.prompt_tokens + usage.completion_tokens
-                    )
-            except Exception:
-                pass
-
-        except Exception as e:
-            err = str(e)
-            if "invalid_api_key" in err.lower() or "401" in err:
-                full_response = "❌ Invalid API key. Please check your Groq API key in the sidebar."
-            elif "rate_limit" in err.lower() or "429" in err:
-                full_response = "⚠️ Rate limit reached. Wait a few seconds and try again."
-            elif "model_not_found" in err.lower():
-                full_response = f"⚠️ Model `{model_id}` not available. Try a different model from the sidebar."
-            else:
-                full_response = f"❌ Error: {err}"
-            response_placeholder.error(full_response)
-
-    # Save assistant message
     st.session_state.messages.append({
         "role": "assistant",
         "content": full_response,
-        "time": datetime.now().strftime("%H:%M")
+        "time": datetime.now().strftime("%H:%M"),
+    })
+    st.session_state.total_messages += 1
+    st.rerun()
+
+# -------------------------------------------------------------------------------
+# HANDLE NEW MESSAGE
+# -------------------------------------------------------------------------------
+if prompt:
+    ts = datetime.now().strftime("%H:%M")
+    st.session_state.messages.append({"role": "user", "content": prompt, "time": ts})
+    st.session_state.total_messages += 1
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    base_system = PERSONAS[st.session_state.persona]["system"]
+    system_prompt = base_system + (f"\n\n{system_extra}" if system_extra.strip() else "")
+    api_messages = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages
+    ]
+
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        full_response = stream_response(system_prompt, api_messages, placeholder)
+
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": full_response,
+        "time": datetime.now().strftime("%H:%M"),
     })
     st.session_state.total_messages += 1

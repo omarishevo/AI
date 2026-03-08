@@ -420,8 +420,7 @@ if not st.session_state.messages:
 else:
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"],
-                             avatar="🧑" if msg["role"]=="user"
-                             else PERSONAS[st.session_state.persona]["icon"]):
+                             avatar="user" if msg["role"]=="user" else "assistant"):
             st.markdown(msg["content"])
 
 st.markdown("</div>", unsafe_allow_html=True)
@@ -446,7 +445,7 @@ if prompt:
     # Save & show user message
     st.session_state.messages.append({"role": "user", "content": prompt, "time": ts})
     st.session_state.total_messages += 1
-    with st.chat_message("user", avatar="🧑"):
+    with st.chat_message("user"):
         st.markdown(prompt)
 
     # Build system prompt
@@ -460,8 +459,7 @@ if prompt:
     ]
 
     # Stream response
-    persona_icon = PERSONAS[st.session_state.persona]["icon"]
-    with st.chat_message("assistant", avatar=persona_icon):
+    with st.chat_message("assistant"):
         response_placeholder = st.empty()
         full_response = ""
 

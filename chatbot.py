@@ -566,7 +566,6 @@ def render_message(role, content, timestamp=""):
 
 # ── Message History ────────────────────────────────────────────────────────────
 if not st.session_state.messages:
-    # Empty state with suggestions
     st.markdown(f"""
     <div class='empty-state'>
       <div class='spark'>✦</div>
@@ -578,7 +577,7 @@ if not st.session_state.messages:
     </div>
     """, unsafe_allow_html=True)
 
-    # Clickable suggestion buttons (invisible but functional)
+    # Clickable suggestion buttons
     cols = st.columns(3)
     for i, suggestion in enumerate(SUGGESTIONS):
         if cols[i % 3].button(suggestion, key=f"sug_{i}", use_container_width=True):
@@ -588,61 +587,42 @@ else:
     for msg in st.session_state.messages:
         render_message(msg["role"], msg["content"], msg.get("time", ""))
 
-
-# ── Chat Input ─────────────────────────────────────────────────────────────────
 st.markdown("</div>", unsafe_allow_html=True)  # close chat-wrapper
 
-st.markdown("<div class='input-dock'><div class='input-inner'>", unsafe_allow_html=True)
-input_col, btn_col = st.columns([10, 1])
+# ── Chat Input (Streamlit native — triggers cleanly without full rerun) ────────
+prompt = st.chat_input(
+    placeholder=f"Message {st.session_state.persona}...",
+    key="main_chat_input"
+)
 
-with input_col:
-    user_input = st.text_input(
-        label="chat_input",
-        label_visibility="collapsed",
-        placeholder=f"Message {st.session_state.persona}...",
-        value=st.session_state.pending_input,
-        key="chat_input_field"
-    )
-
-with btn_col:
-    send = st.button("Send ➤", key="send_btn")
-
-st.markdown("</div></div>", unsafe_allow_html=True)
-
-# ── Handle Submission ──────────────────────────────────────────────────────────
-if (send or st.session_state.pending_input) and (user_input or st.session_state.pending_input):
-    query = user_input or st.session_state.pending_input
+# Pick up suggestion clicks
+if st.session_state.pending_input and not prompt:
+    prompt = st.session_state.pending_input
     st.session_state.pending_input = ""
 
-    # Add user message
+# ── Handle Submission ──────────────────────────────────────────────────────────
+if prompt:
     ts = datetime.now().strftime("%H:%M")
-    st.session_state.messages.append({"role": "user", "content": query, "time": ts})
+
+    # Append & render user message immediately
+    st.session_state.messages.append({"role": "user", "content": prompt, "time": ts})
     st.session_state.total_messages += 1
+    render_message("user", prompt, ts)
 
-    # Call Claude API
-    try:
-        client = anthropic.Anthropic(api_key=st.session_state.api_key)
+    # Build API message list
+    api_messages = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages
+    ]
+    system_prompt = PERSONAS[st.session_state.persona]["system"]
 
-        # Build message history
-        api_messages = [
-            {"role": m["role"], "content": m["content"]}
-            for m in st.session_state.messages
-        ]
+    # Render assistant bubble that streams into it live
+    with st.chat_message("assistant"):
+        try:
+            client = anthropic.Anthropic(api_key=st.session_state.api_key)
 
-        system_prompt = PERSONAS[st.session_state.persona]["system"]
-
-        # Stream response
-        full_response = ""
-        with st.spinner(""):
-            st.markdown("""
-            <div class='msg-row assistant' id='typing'>
-              <div class='avatar bot-av'>✦</div>
-              <div class='typing-indicator'>
-                <div class='typing-dot'></div>
-                <div class='typing-dot'></div>
-                <div class='typing-dot'></div>
-              </div>
-            </div>""", unsafe_allow_html=True)
+            full_response = ""
+            response_placeholder = st.empty()
 
             with client.messages.stream(
                 model=model_choice,
@@ -652,35 +632,43 @@ if (send or st.session_state.pending_input) and (user_input or st.session_state.
             ) as stream:
                 for text in stream.text_stream:
                     full_response += text
+                    # Update placeholder with accumulated text in real time
+                    response_placeholder.markdown(full_response + "▌")
 
-            # Get token usage
-            final_msg = stream.get_final_message()
-            tokens_used = (final_msg.usage.input_tokens + final_msg.usage.output_tokens
-                           if hasattr(final_msg, "usage") else 0)
-            st.session_state.total_tokens += tokens_used
+            # Final render without cursor
+            response_placeholder.markdown(full_response)
 
-        # Store assistant response
-        ts_resp = datetime.now().strftime("%H:%M")
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": full_response,
-            "time": ts_resp
-        })
-        st.session_state.total_messages += 1
-        st.rerun()
+            # Token accounting
+            try:
+                final_msg = stream.get_final_message()
+                tokens_used = (
+                    final_msg.usage.input_tokens + final_msg.usage.output_tokens
+                )
+                st.session_state.total_tokens += tokens_used
+            except Exception:
+                pass
 
-    except anthropic.AuthenticationError:
-        st.error("❌ Invalid API key. Please check your Anthropic API key in the sidebar.")
-        st.session_state.messages.pop()
+        except anthropic.AuthenticationError:
+            full_response = "❌ Invalid API key. Please check your Anthropic API key in the sidebar."
+            st.error(full_response)
 
-    except anthropic.RateLimitError:
-        st.error("⚠️ Rate limit reached. Please wait a moment and try again.")
-        st.session_state.messages.pop()
+        except anthropic.RateLimitError:
+            full_response = "⚠️ Rate limit reached. Please wait a moment and try again."
+            st.warning(full_response)
 
-    except anthropic.APIError as e:
-        st.error(f"⚠️ API error: {str(e)}")
-        st.session_state.messages.pop()
+        except anthropic.APIError as e:
+            full_response = f"⚠️ API error: {str(e)}"
+            st.error(full_response)
 
-    except Exception as e:
-        st.error(f"❌ Unexpected error: {str(e)}")
-        st.session_state.messages.pop()
+        except Exception as e:
+            full_response = f"❌ Unexpected error: {str(e)}"
+            st.error(full_response)
+
+    # Save assistant response
+    ts_resp = datetime.now().strftime("%H:%M")
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": full_response,
+        "time": ts_resp
+    })
+    st.session_state.total_messages += 1

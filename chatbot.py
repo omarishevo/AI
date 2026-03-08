@@ -29,14 +29,63 @@ st.markdown("""
     color: #E8E8F0;
   }
   .stApp { background: #0A0A0F; }
+
+  /* ── Sidebar ── */
   section[data-testid="stSidebar"] {
     background: #111118 !important;
-    border-right: 1px solid #1E1E2E;
+    border-right: 1px solid #1E1E2E !important;
   }
-  section[data-testid="stSidebar"] * { color: #C8C8D8 !important; }
+  /* Sidebar text — only target text nodes, NOT the toggle button */
+  section[data-testid="stSidebar"] p,
+  section[data-testid="stSidebar"] label,
+  section[data-testid="stSidebar"] span:not([data-testid]),
+  section[data-testid="stSidebar"] div.stMarkdown,
+  section[data-testid="stSidebar"] .stSelectbox label,
+  section[data-testid="stSidebar"] .stSlider label,
+  section[data-testid="stSidebar"] .stTextInput label {
+    color: #C8C8D8 !important;
+  }
+  /* Sidebar inputs */
+  section[data-testid="stSidebar"] input {
+    background: #1A1A28 !important;
+    border: 1px solid #2E2E4E !important;
+    color: #E8E8F0 !important;
+    border-radius: 8px !important;
+  }
+  /* Sidebar selectbox */
+  section[data-testid="stSidebar"] .stSelectbox > div > div {
+    background: #1A1A28 !important;
+    border: 1px solid #2E2E4E !important;
+    color: #E8E8F0 !important;
+  }
+  /* Sidebar collapse/expand button — keep it visible */
+  button[data-testid="collapsedControl"],
+  button[kind="header"],
+  [data-testid="stSidebarCollapseButton"],
+  [data-testid="stSidebarOpenButton"] {
+    color: #A78BFA !important;
+    background: #1A1A28 !important;
+    border: 1px solid #2E2E4E !important;
+    border-radius: 8px !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+  /* Make sure the sidebar toggle arrow is always visible */
+  [data-testid="collapsedControl"] svg,
+  [data-testid="stSidebarCollapseButton"] svg,
+  [data-testid="stSidebarOpenButton"] svg {
+    fill: #A78BFA !important;
+    color: #A78BFA !important;
+  }
 
-  /* ── Hide Streamlit chrome ── */
-  #MainMenu, footer, header { visibility: hidden; }
+  /* ── Keep Streamlit toolbar visible for sidebar toggle ── */
+  header[data-testid="stHeader"] {
+    background: transparent !important;
+    border-bottom: none !important;
+  }
+  /* Only hide footer */
+  footer { visibility: hidden; }
+
   .block-container { padding: 0 !important; max-width: 100% !important; }
 
   /* ── Chat container ── */

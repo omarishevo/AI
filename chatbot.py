@@ -1,12 +1,12 @@
 """
-AI Chatbot — Powered by Claude (Anthropic API)
-A sleek, production-grade Streamlit chatbot application.
+Nova AI Chatbot — Powered by Groq (Free API)
+Fast, free, no credit card required.
+Get your free API key at: console.groq.com
 """
 
 import streamlit as st
-import anthropic
-import time
-import json"""
+from groq import Groq
+import json
 Nova AI Chatbot — Powered by Groq (Free API)
 Fast, free, no credit card required.
 Get your free API key at: console.groq.com
